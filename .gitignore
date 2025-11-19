@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+*.log
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+.settings/
+
+# Pytest cache
+.pytest_cache/
+.cache/
+
+# SQLite databases
+*.db
+*.sqlite3
+
+# Sphinx build files
+docs/_build/
+docs/build/
+
+# Postman local files
+*.postman_collection
+
+# Docker
+*.pid
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*/logs/
+*.log
+
+# Environment variables, secrets
+.env
+.env.*
