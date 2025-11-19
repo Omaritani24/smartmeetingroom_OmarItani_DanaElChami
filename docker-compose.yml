@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  users:
+    build:
+      context: .
+      dockerfile: users_service/Dockerfile
+    container_name: users_service
+    ports:
+      - "8000:8000"
+    volumes:
+      - users_db:/app/users_service/data
+    restart: unless-stopped
+
+  rooms:
+    build:
+      context: .
+      dockerfile: rooms_service/Dockerfile
+    container_name: rooms_service
+    ports:
+      - "8001:8001"
+    volumes:
+      - rooms_db:/app/rooms_service/data
+    restart: unless-stopped
+
+volumes:
+  users_db:
+  rooms_db:
+
