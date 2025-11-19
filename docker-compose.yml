@@ -23,7 +23,22 @@ services:
       - rooms_db:/app/rooms_service/data
     restart: unless-stopped
 
+  bookings:
+    build:
+      context: .
+      dockerfile: bookings_service/Dockerfile
+    container_name: bookings_service
+    ports:
+      - "8002:8002"
+    volumes:
+      - bookings_db:/app/bookings_service/data
+    depends_on:
+      - users
+      - rooms
+    restart: unless-stopped
+
 volumes:
   users_db:
   rooms_db:
+  bookings_db:
 

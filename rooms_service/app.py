@@ -6,10 +6,10 @@ from .database import Base, engine, SessionLocal
 from . import models, schemas
 
 app = FastAPI(title="Rooms Service")
-# Create tables
+
 Base.metadata.create_all(bind=engine)
 
-# Dependency to get DB session
+
 def get_db():
     db = SessionLocal()
     try:
