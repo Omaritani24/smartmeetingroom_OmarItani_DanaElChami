@@ -43,3 +43,6 @@ class PasswordResetRequest(BaseModel):
     old_password: Optional[str] = Field(None, min_length=6)
     new_password: str = Field(..., min_length=6)
 
+
+class UserWithBookings(UserResponse):
+    bookings: list[dict] = []

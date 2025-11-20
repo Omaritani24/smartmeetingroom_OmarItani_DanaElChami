@@ -1,38 +1,33 @@
-import httpx
-from fastapi import Depends, HTTPException
+from jose import jwt, JWTError
+from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-import os
 
-USERS_SERVICE_URL = os.getenv("USERS_SERVICE_URL", "http://users_service:8000")
+SECRET_KEY = "your-secret-key-change-in-production"
+ALGORITHM = "HS256"
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
-
-async def verify_token(token: str):
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.get(
-                f"{USERS_SERVICE_URL}/users/me",
-                headers={"Authorization": f"Bearer {token}"},
-                timeout=5
-            )
-            if r.status_code == 200:
-                return r.json()
-    except:
-        pass
-    return None
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="http://127.0.0.1:8001/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme)):
-    user = await verify_token(token)
-    if user is None:
-        raise HTTPException(status_code=401)
-    return user
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
-async def get_current_admin(user=Depends(get_current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403)
-    return user
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
 
-async def get_current_facility(user=Depends(get_current_user)):
-    if user.get("role") not in ["facility_manager", "admin"]:
-        raise HTTPException(status_code=403)
-    return user
+        user = {
+            "id": payload.get("id"),
+            "username": payload.get("sub"),
+            "email": payload.get("email"),
+            "role": payload.get("role")
+        }
+
+        if user["username"] is None:
+            raise credentials_exception
+
+        return user
+
+    except JWTError:
+        raise credentials_exception

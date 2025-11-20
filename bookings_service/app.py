@@ -1,28 +1,31 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_, and_, text
+from sqlalchemy import and_, or_, text
 from datetime import datetime
 import httpx
-import os
 
-from .database import Base, engine, SessionLocal
-from . import models, schemas
-from .auth import get_current_user, get_current_admin, get_current_facility
+from .database import Base, engine, get_db
+from . import schemas, models
+from .auth import get_current_user
 
-app = FastAPI()
+ROOMS_URL = "http://127.0.0.1:8003"
 
 Base.metadata.create_all(bind=engine)
 
-USERS_URL = os.getenv("USERS_SERVICE_URL", "http://users_service:8000")
-ROOMS_URL = os.getenv("ROOMS_SERVICE_URL", "http://rooms_service:8001")
+app = FastAPI()
 
-def get_db():
-    db = SessionLocal()
+@app.get("/")
+def root():
+    return {"service": "bookings", "status": "running"}
+
+@app.get("/health")
+def health():
     try:
-        yield db
-    finally:
-        db.close()
-
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "ok"}
+    except:
+        raise HTTPException(status_code=503)
 
 async def room_exists(room_id: int):
     try:
@@ -42,8 +45,6 @@ async def room_available(room_id: int):
         pass
     return False
 
-
-
 def conflicts(db, room_id, start, end, exclude=None):
     q = db.query(models.Booking).filter(
         models.Booking.room_id == room_id,
@@ -58,21 +59,6 @@ def conflicts(db, room_id, start, end, exclude=None):
         q = q.filter(models.Booking.id != exclude)
     return q.all()
 
-@app.get("/")
-def root():
-    return {"service": "bookings", "status": "running"}
-
-
-@app.get("/health")
-def health():
-    try:
-        with SessionLocal() as db:
-            db.execute(text("SELECT 1"))
-        return {"status": "ok"}
-    except:
-        raise HTTPException(status_code=503)
-
-
 @app.get("/bookings", response_model=list[schemas.BookingResponse])
 def all_bookings(
     db: Session = Depends(get_db),
@@ -84,7 +70,6 @@ def all_bookings(
     if current["role"] not in ["admin", "facility_manager"]:
         q = q.filter(models.Booking.user_id == current["id"])
     return q.order_by(models.Booking.start_time.desc()).offset(skip).limit(limit).all()
-
 
 @app.get("/bookings/{booking_id}", response_model=schemas.BookingResponse)
 def get_booking(
@@ -98,7 +83,6 @@ def get_booking(
     if current["role"] not in ["admin", "facility_manager"] and b.user_id != current["id"]:
         raise HTTPException(status_code=403)
     return b
-
 
 @app.post("/bookings", response_model=schemas.BookingResponse, status_code=201)
 async def create_booking(
@@ -126,7 +110,6 @@ async def create_booking(
     db.refresh(b)
     return b
 
-
 @app.put("/bookings/{booking_id}", response_model=schemas.BookingResponse)
 async def update_booking(
     booking_id: int,
@@ -137,12 +120,10 @@ async def update_booking(
     b = db.query(models.Booking).filter(models.Booking.id == booking_id).first()
     if not b:
         raise HTTPException(status_code=404)
-
     if current["role"] not in ["admin", "facility_manager"] and b.user_id != current["id"]:
         raise HTTPException(status_code=403)
 
     update = data.model_dump(exclude_unset=True)
-
     start = update.get("start_time", b.start_time)
     end = update.get("end_time", b.end_time)
     room = update.get("room_id", b.room_id)
@@ -164,7 +145,6 @@ async def update_booking(
     db.refresh(b)
     return b
 
-
 @app.delete("/bookings/{booking_id}", status_code=204)
 def cancel_booking(
     booking_id: int,
@@ -180,8 +160,6 @@ def cancel_booking(
     b.updated_at = datetime.utcnow()
     db.commit()
     return None
-
-
 
 @app.get("/bookings/availability/check", response_model=schemas.AvailabilityResponse)
 async def check_availability(
@@ -203,7 +181,6 @@ async def check_availability(
         )
     return schemas.AvailabilityResponse(is_available=True)
 
-
 @app.get("/bookings/user/{user_id}", response_model=list[schemas.BookingResponse])
 def user_history(
     user_id: int,
@@ -218,7 +195,6 @@ def user_history(
         .order_by(models.Booking.start_time.desc())
         .all()
     )
-
 
 @app.get("/bookings/room/{room_id}", response_model=list[schemas.BookingResponse])
 def room_bookings(

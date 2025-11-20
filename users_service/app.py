@@ -2,6 +2,9 @@ from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from datetime import timedelta
+import os
+import httpx
+
 from .database import Base, engine, SessionLocal
 from . import models, schemas
 from .auth import (
@@ -16,10 +19,11 @@ from .auth import (
 )
 
 app = FastAPI(title="Users Service")
-# Create tables
 Base.metadata.create_all(bind=engine)
 
-# Dependency to get DB session
+BOOKINGS_SERVICE_URL = os.getenv("BOOKINGS_SERVICE_URL", "http://bookings_service:8002")
+
+
 def get_db():
     db = SessionLocal()
     try:
@@ -27,9 +31,22 @@ def get_db():
     finally:
         db.close()
 
+
+def fetch_user_bookings(user_id: int):
+    try:
+        with httpx.Client(timeout=5) as client:
+            r = client.get(f"{BOOKINGS_SERVICE_URL}/bookings/user/{user_id}")
+            if r.status_code == 200:
+                return r.json()
+    except Exception:
+        pass
+    return []
+
+
 @app.get("/")
 def root():
     return {"service": "users", "status": "running"}
+
 
 @app.get("/health")
 def health():
@@ -46,24 +63,18 @@ def health():
 
 @app.post("/register", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
 def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    """Register a new user."""
-    # Check if username already exists
     db_user = get_user_by_username(db, username=user.username)
     if db_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered"
         )
-    
-    # Check if email already exists
     db_user = db.query(models.User).filter(models.User.email == user.email).first()
     if db_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered"
         )
-    
-    # Create new user
     hashed_password = get_password_hash(user.password)
     db_user = models.User(
         name=user.name,
@@ -80,7 +91,6 @@ def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
 
 @app.post("/login", response_model=schemas.Token)
 def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
-    """Login and get access token."""
     user = authenticate_user(db, user_credentials.username, user_credentials.password)
     if not user:
         raise HTTPException(
@@ -90,15 +100,21 @@ def login(user_credentials: schemas.UserLogin, db: Session = Depends(get_db)):
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username}, expires_delta=access_token_expires
-    )
+    {
+        "sub": user.username,
+        "id": user.id,
+        "role": user.role
+    }
+)
+
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@app.get("/users/me", response_model=schemas.UserResponse)
+@app.get("/users/me", response_model=schemas.UserWithBookings)
 def read_users_me(current_user: models.User = Depends(get_current_user)):
-    """Get current user information."""
-    return current_user
+    user_data = schemas.UserResponse.model_validate(current_user).model_dump()
+    user_data["bookings"] = fetch_user_bookings(current_user.id)
+    return user_data
 
 
 @app.get("/users", response_model=list[schemas.UserResponse])
@@ -108,7 +124,6 @@ def read_users(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user)
 ):
-    """Get all users (admin only)."""
     users = db.query(models.User).offset(skip).limit(limit).all()
     return users
 
@@ -119,14 +134,11 @@ def read_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """Get a specific user by ID."""
-    # Users can only view their own profile unless they're admin
     if current_user.id != user_id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
-    
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if db_user is None:
         raise HTTPException(
@@ -136,6 +148,28 @@ def read_user(
     return db_user
 
 
+@app.get("/users/{user_id}/with-bookings", response_model=schemas.UserWithBookings)
+def read_user_with_bookings(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    if current_user.id != user_id and current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    db_user = db.query(models.User).filter(models.User.id == user_id).first()
+    if db_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    user_data = schemas.UserResponse.model_validate(db_user).model_dump()
+    user_data["bookings"] = fetch_user_bookings(user_id)
+    return user_data
+
+
 @app.put("/users/{user_id}", response_model=schemas.UserResponse)
 def update_user(
     user_id: int,
@@ -143,27 +177,20 @@ def update_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """Update a user (users can update themselves, admins can update anyone)."""
-    # Users can only update their own profile unless they're admin
     if current_user.id != user_id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
-    
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if db_user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-    
-    # Update fields
     update_data = user_update.model_dump(exclude_unset=True)
     if "password" in update_data:
         update_data["hashed_password"] = get_password_hash(update_data.pop("password"))
-    
-    # Check for username/email conflicts
     if "username" in update_data and update_data["username"] != db_user.username:
         existing_user = get_user_by_username(db, username=update_data["username"])
         if existing_user:
@@ -171,7 +198,6 @@ def update_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Username already taken"
             )
-    
     if "email" in update_data and update_data["email"] != db_user.email:
         existing_user = db.query(models.User).filter(models.User.email == update_data["email"]).first()
         if existing_user:
@@ -179,10 +205,8 @@ def update_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Email already taken"
             )
-    
     for field, value in update_data.items():
         setattr(db_user, field, value)
-    
     db.commit()
     db.refresh(db_user)
     return db_user
@@ -194,7 +218,6 @@ def delete_user(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_admin_user)
 ):
-    """Delete a user (admin only)."""
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if db_user is None:
         raise HTTPException(
@@ -212,14 +235,12 @@ def read_user_by_username(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """Get user details by username."""
     db_user = get_user_by_username(db, username=username)
     if db_user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-
     if current_user.username != username and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -235,28 +256,23 @@ def reset_password(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(get_current_user)
 ):
-    """Reset a user's password. Users can reset their own password; admins can reset anyone's."""
     if current_user.id != user_id and current_user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
         )
-
     db_user = db.query(models.User).filter(models.User.id == user_id).first()
     if db_user is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found"
         )
-
-    # Regular users must provide their old password
     if current_user.role != "admin":
         if payload.old_password is None or not verify_password(payload.old_password, db_user.hashed_password):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Old password is incorrect"
             )
-
     db_user.hashed_password = get_password_hash(payload.new_password)
     db.commit()
     db.refresh(db_user)
